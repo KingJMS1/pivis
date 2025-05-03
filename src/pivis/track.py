@@ -20,6 +20,7 @@ class Track:
     cols : Iterable[str]
         Column names for df
     """
+
     def __init__(self, df: pd.DataFrame, raw_df: pd.DataFrame, period: int, img: np.ndarray, cols: Iterable[str]):
         self.df = df
         self.raw_df = raw_df
@@ -57,7 +58,6 @@ class Track:
         Track
             Instance of Track
         """
-
         # Read file
         raw_df = pd.read_excel(file)
         df = raw_df.copy()

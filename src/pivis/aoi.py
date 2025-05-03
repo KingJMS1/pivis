@@ -14,7 +14,8 @@ class AreasOfInterest:
     Attributes
     -----------
     mus : np.ndarray
-        Centers of AOIS 
+        Centers of AOIS
+        
     covs : np.ndarray
         Covariance matrices for AOIS
     mvns : List[stats.rv_continuous]
@@ -29,6 +30,7 @@ class AreasOfInterest:
     transition_probs : np.ndarray
         Probability of transitioning from 1 cluster to another
     """
+    
     def __init__(self, mus: np.ndarray, covs: np.ndarray, mvns: List[stats.rv_continuous], track: Track, cluster_len: int, no_cluster: np.ndarray, cluster: np.ndarray, transition_probs: np.ndarray):
         self.mus = mus
         self.covs = covs
@@ -62,7 +64,6 @@ class AreasOfInterest:
         Tuple[figure.Figure, axes.Axes, List[contour.QuadContourSet | collections.PathCollection]]
             Figure, axes, and list of matplotlib artists created
         """
-    
         # Initialize image
         fig, ax = plt.subplots()
         fig.set_figwidth(figsize[0])
