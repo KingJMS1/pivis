@@ -1,7 +1,6 @@
 [build-system]
 requires = [
-    "setuptools",
-    "pdoc"
+    "setuptools"
 ]
 build-backend = "setuptools.build_meta"
 
@@ -11,7 +10,8 @@ dependencies = [
     "pandas >= 2.2.2",
     "matplotlib >= 3.8.4",
     "scipy >= 1.12.0",
-    "openpyxl >= 3.1.5"
+    "openpyxl >= 3.1.5",
+    "pdoc"
 ]
 version = "0.0.1"
 authors = [
