@@ -2,3 +2,4 @@
 *.png
 *.pyc
 src/pivis.egg-info
+_buildocs
