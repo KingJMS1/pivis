@@ -8,3 +8,6 @@ cd pivis
 pip install --editable .
 ```
 3. Edit away. Example of how to use in https://github.com/KingJMS1/pivis/blob/main/examples/example.py.
+
+### API Documentation:
+https://kingjms1.github.io/pivis/pivis.html
