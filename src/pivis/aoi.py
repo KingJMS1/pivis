@@ -7,7 +7,7 @@ from .track import Track
 from scipy import stats, special
 import warnings
 
-class AOIS:
+class AreasOfInterest:
     """
     Represents the various AOIs in an image as ovals (via Multivariate normal distribution)
     
@@ -135,10 +135,6 @@ class AOIS:
         time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col = self.track.cols
         xlab = IMG_X_col
         ylab = IMG_Y_col
-
-        data = data.iloc[1000:1500]
-        cluster = cluster[1004:1500]
-        bads = bads[1004:1500]
         
         # Function to animate each frame
         def plot_frame(frame):
@@ -247,7 +243,7 @@ class AOIS:
             above_det_lim = lambda allFXs, allFYs: np.linalg.det(data[(data[fixation_X_col].isin(allFXs)) & (data[fixation_Y_col].isin(allFYs))][[IMG_X_col, IMG_Y_col]].cov().to_numpy()) > det_lim
 
             # Combine clusters close enough to each other
-            kl = AOIS._kls(mus, covs)
+            kl = AreasOfInterest._kls(mus, covs)
             groups = []
             groupmap = {}
             xdx, ydx = np.nonzero((kl < threshold) & (kl != 0))

@@ -1,9 +1,9 @@
-from pivis import Track, AOIS
+from pivis import Track, AreasOfInterest
 import matplotlib.pyplot as plt
 
-track = Track.from_excel("5 Minute Demo file (1).xlsx", 
+track = Track.from_excel("/home/mascott/work/Eye Tracking/5 Minute Demo file (1).xlsx", 
                          20, 
-                         "IMG_4702.jpeg", 
+                         "/home/mascott/work/Eye Tracking/IMG_4702.jpeg", 
                          "Recording timestamp", 
                          "Assisted mapping gaze point X [IMG_4702]", 
                          "Assisted mapping gaze point Y [IMG_4702]", 
@@ -11,7 +11,7 @@ track = Track.from_excel("5 Minute Demo file (1).xlsx",
                          "Fixation point X", 
                          "Fixation point Y")
 
-aois = AOIS.from_track(track, threshold=9, det_lim=5e7)
+aois = AreasOfInterest.from_track(track, threshold=9, det_lim=5e7)
 
 aois.plot(method="ovals", plot_transitions=False)
 plt.savefig("out1.png")
