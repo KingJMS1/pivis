@@ -7,4 +7,4 @@ git clone https://github.com/KingJMS1/pivis.git
 cd pivis
 pip install --editable .
 ```
-3. Edit away. Examples of how to use in https://github.com/KingJMS1/pivis/blob/main/examples/example.py.
+3. Edit away. Example of how to use in https://github.com/KingJMS1/pivis/blob/main/examples/example.py.
