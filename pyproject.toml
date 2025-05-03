@@ -1,15 +1,17 @@
 [build-system]
 requires = [
-    "setuptools",
-    "pandas >= 2.2.2",
-    "matplotlib == 3.8.4",
-    "scipy >= 1.12.0",
-    "openpyxl >= 3.1.5"
+    "setuptools"
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pivis_mascottpy"
+name = "pivis"
+dependencies = [
+    "pandas >= 2.2.2",
+    "matplotlib >= 3.8.4",
+    "scipy >= 1.12.0",
+    "openpyxl >= 3.1.5"
+]
 version = "0.0.1"
 authors = [
   { name="Mahlon Scott", email="mascottpy@gmail.com" },
