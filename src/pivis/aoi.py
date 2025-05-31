@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib import figure, axes, contour, collections, animation
 from .track import Track
 from scipy import stats, special
+import imageio_ffmpeg
 import warnings
 
 class AreasOfInterest:
@@ -136,6 +137,7 @@ class AreasOfInterest:
         time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col = self.track.cols
         xlab = IMG_X_col
         ylab = IMG_Y_col
+        plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
         
         # Function to animate each frame
         def plot_frame(frame):
