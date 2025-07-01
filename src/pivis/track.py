@@ -29,7 +29,7 @@ class Track:
         self.cols = cols
 
     @classmethod
-    def from_excel(cls, file: str, period: int, img: str, time_col: str, IMG_X_col: str, IMG_Y_col: str, type_col: str, fixation_X_col: str, fixation_Y_col: str) -> Self:
+    def from_excel(cls, file: str, period: int, img: str, time_col: str, IMG_X_col: str, IMG_Y_col: str, type_col: str, fixation_X_col: str, fixation_Y_col: str, contains_other_sensors = True) -> Self:
         """Reads tracking data from an excel spreadsheet
 
         Parameters
@@ -48,11 +48,12 @@ class Track:
             Name of column containing Y (vertical) position in image
         type_col : str
             Name of column classifying eye movement types
-        Fixation_X_col : str
+        fixation_X_col : str
             Name of column containing Fixation X information
-        Fixation_Y_col : str
+        fixation_Y_col : str
             Name of column containing Fixation Y information
-            
+        contains_other_sensors : bool
+            Set to true if file contains sensors other than eye trackers
         Returns:
         --------
         Track
@@ -60,6 +61,10 @@ class Track:
         """
         # Read file
         raw_df = pd.read_excel(file)
+        
+        # Remove other sensors if necessary
+        if contains_other_sensors:
+            raw_df = pd.DataFrame(raw_df[raw_df["Sensor"] == "Eye Tracker"])
         df = raw_df.copy()
         cols = [time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col]
         raw_df = raw_df[cols]

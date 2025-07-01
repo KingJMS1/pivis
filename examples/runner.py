@@ -1,4 +1,4 @@
-from pivis import Track, AreasOfInterest
+from pivis import Track, UnsupervisedAreasOfInterest
 import matplotlib.pyplot as plt
 import datetime
 import time
@@ -60,7 +60,7 @@ track = Track.from_excel(excel_path,
                          "Fixation point Y")
 
 #Generate AOIs
-aois = AreasOfInterest.from_track(track, threshold=9, det_lim=5e7)
+aois = UnsupervisedAreasOfInterest.from_track(track, threshold=9, det_lim=5e7)
 
 #Plot and save
 basename = excel_base

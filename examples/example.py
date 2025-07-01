@@ -1,4 +1,4 @@
-from pivis import Track, AreasOfInterest
+from pivis import Track, UnsupervisedAreasOfInterest
 import matplotlib.pyplot as plt
 
 track = Track.from_excel("/home/mascott/work/Eye Tracking/5 Minute Demo file (1).xlsx", 
@@ -11,7 +11,7 @@ track = Track.from_excel("/home/mascott/work/Eye Tracking/5 Minute Demo file (1)
                          "Fixation point X", 
                          "Fixation point Y")
 
-aois = AreasOfInterest.from_track(track, threshold=9, det_lim=5e7)
+aois = UnsupervisedAreasOfInterest.from_track(track, threshold=9, det_lim=5e7)
 
 aois.plot(method="ovals", plot_transitions=False)
 plt.savefig("out1.png")

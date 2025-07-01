@@ -1,14 +1,23 @@
-import pandas as pd
 from typing import *
+import warnings
+import shutil
+import itertools
+import pickle
+import os
+
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import figure, axes, contour, collections, animation
-from .track import Track
 from scipy import stats, special
+from PIL import Image
+import Levenshtein
 import imageio_ffmpeg
-import warnings
 
-class AreasOfInterest:
+
+from .track import Track
+
+class UnsupervisedAreasOfInterest:
     """
     Represents the various AOIs in an image as ovals (via Multivariate normal distribution)
     
@@ -246,7 +255,7 @@ class AreasOfInterest:
             above_det_lim = lambda allFXs, allFYs: np.linalg.det(data[(data[fixation_X_col].isin(allFXs)) & (data[fixation_Y_col].isin(allFYs))][[IMG_X_col, IMG_Y_col]].cov().to_numpy()) > det_lim
 
             # Combine clusters close enough to each other
-            kl = AreasOfInterest._kls(mus, covs)
+            kl = UnsupervisedAreasOfInterest._kls(mus, covs)
             groups = []
             groupmap = {}
             xdx, ydx = np.nonzero((kl < threshold) & (kl != 0))
@@ -338,3 +347,342 @@ class AreasOfInterest:
         transitionProbs = transitions / np.sum(transitions, axis=1).reshape((transitions.shape[0], 1))
         
         return cls(mus, covs, mvns, track, cluster_len, noCluster, cluster, transitionProbs)
+    
+class SupervisedAreasOfInterest:
+    """
+    Represents the various AOIs in an image as ovals (via Multivariate normal distribution)
+    
+    Attributes
+    -----------
+    aois : List[np.ndarray]
+        List of all aois, stored as images indicating where they are in the overall image
+    track : Track
+        Instance of Track, containing data for plotting
+    cluster_len : int
+        Number of observations to use to smooth raw data before clustering into AOIs.
+    transition_probs : np.ndarray
+        Probability of transitioning from 1 cluster to another
+    scan_string : np.ndarray
+        List of clusters looked at, in chronological order
+    colors : np.ndarray
+        All AOI colors in the original image, after removing edge blending
+    aoi_img : np.ndarray
+        Image showing all the AOIs
+    cluster_img : np.ndarray
+        Image similar to aoi_img but with colors replaced with indices in colors
+    """
+    
+    def __init__(self, aois: List[np.ndarray], track : Track, cluster_len : int, transition_probs : np.ndarray, scan_string : np.ndarray, colors : np.ndarray, aoi_img : np.ndarray, cluster_img: np.ndarray):
+        self.aois = aois
+        self.track = track
+        self.cluster_len = cluster_len
+        self.transition_probs = transition_probs
+        self.scan_string = scan_string
+        self.colors = colors
+        self.aoi_img = aoi_img
+        self.cluster_img = cluster_img
+
+    def plot(self, figsize: Tuple[int] = (15, 10), plot_transitions: bool = False, transitionThreshold: float = 0.3) -> Tuple[figure.Figure, axes.Axes]:
+        """
+        Plot the AOIs, Plot is left in memory so the user can plot extra things on it/change the title, etc.
+        
+        Parameters
+        -----------
+        figsize : Tuple[int]
+            Size of figure to plot, in inches
+            Default is (15, 10)
+        plot_transitions: bool
+            Whether or not to plot common transitions
+            Default is False.
+        transitionThreshold: float
+            Threshold for probability of a transition to occur, above which the transition will be plotted.
+            Default is 0.3
+        Returns
+        --------
+        Tuple[figure.Figure, axes.Axes]
+            Figure, axes of created image
+        """
+        # Initialize image
+        fig, ax = plt.subplots()
+        fig.set_figwidth(figsize[0])
+        fig.set_figheight(figsize[1])
+        plt.imshow(self.track.img)
+        plots = []
+        img = self.track.img
+
+        # Draw clusters
+        plt.imshow(self.aoi_img)
+
+        if plot_transitions:
+            for i, transition in enumerate(self.transition_probs):
+                for j, prob in enumerate(transition):
+                    if prob > transitionThreshold:
+                        mu_i = np.mean(np.argwhere(self.cluster_img == i), axis=0)
+                        mu_j = np.mean(np.argwhere(self.cluster_img == j), axis=0)
+                        x = [mu_i[0], mu_j[0]]
+                        y = [mu_i[1], mu_j[1]]
+                        plt.plot(x, y, color="black", alpha=prob)
+                        slope = (y[1] - y[0]) / (x[1] - x[0])
+                        p25Dist = 0.25 * (x[1] - x[0])
+                        newy = y[0] + p25Dist * slope
+                        newx = p25Dist + x[0]
+                        plt.arrow(newx, newy, np.sign(x[1] - x[0]), np.sign(x[1] - x[0]) * (y[1] - y[0]) / (x[1] - x[0]), head_width=40)
+
+        return fig, ax, plots
+
+    def video(self, figsize: Tuple[int] = (15, 10), fileloc: str = "vid.mp4", ops: int = 25, show_obs: int = 5, verbose: bool = False) -> None:
+        """
+        Generates a video from the AOIs for a given track
+
+        Parameters
+        -----------
+        figsize: Tuple[int]
+            Size for matplotlib figure in vidoe
+            Default is (15, 10)
+        fileloc: str
+            Location to save video
+            Default is "vid.mp4"
+        ops: int
+            Number of observations per second to show in the video, i.e. if period is 25 for the track, then at 40 ops, 1 second of video corresponds to 1 second of real time.
+            Default is 25
+        show_obs: int
+            Number of observations on screen in any 1 frame.
+            Default is 5
+        verbose: bool
+            Whether or not to print progress, prints every 50 frames.
+        """
+        # Initialize variables
+        data = self.track.raw_df
+        img = self.track.img
+        FuncAnimation = animation.FuncAnimation
+        time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col = self.track.cols
+        xlab = IMG_X_col
+        ylab = IMG_Y_col
+        
+        # Function to animate each frame
+        def plot_frame(frame):
+            if verbose:
+                if frame % 50 == 0:
+                    print(frame)
+            newPt = data.iloc[frame:(frame + show_obs), ]
+            scatter.set_offsets(np.array([newPt[xlab], newPt[ylab]]).T)
+            return scatter,
+        
+        # Setup image
+        fig, ax = plt.subplots()
+        fig.set_figwidth(figsize[0])
+        fig.set_figheight(figsize[1])
+        ax.imshow(img)
+
+        # Do the animation
+        scatter = ax.scatter(data.iloc[0:show_obs, ][xlab], data.iloc[0:show_obs, ][ylab], marker="x", s=100, color="red")
+        ani = FuncAnimation(fig, plot_frame, frames=range(data.shape[0]), init_func=lambda: plot_frame(0), blit=True)
+        ani.save(fileloc, fps=ops)
+
+    def save(self, fileloc: str = "out.pkl"):
+        with open(fileloc, "wb") as file:
+            pickle.dump(self, file)
+
+    @staticmethod
+    def load(fileloc: str = "out.pkl") -> Self:
+        with open(fileloc, "rb") as file:
+            return pickle.load(file)
+    
+    @staticmethod
+    def from_file(fileloc: str = "out.pkl") -> Self:
+        return SupervisedAreasOfInterest.load(fileloc)
+
+    @classmethod
+    def from_labelled_img(cls, labelled_img: str, track: Track, verbose: bool = True, cluster_len: int = 5, figsize=(10,8), aoi_img_dir = "./aois", remove_background = False, first_run = False) -> Self:
+        """
+        Generates AOIs from tracking information
+
+        Parameters
+        -----------
+        labelled_img: str
+            Path to image with AOIS labelled as differently colored areas
+        track : Track
+            Tracking information to use
+        verbose : bool
+            Whether or not to print out the number of AOIs remaining after each iteration.
+            Default is False.
+        cluster_len : int
+            When looking at the raw data, how many previous observations should be used to determine the cluster of the current observation.
+            (i.e. a smoothing factor for clustering the raw data, higher is smoother)
+            Default is 5
+        figsize : Tuple[int]
+            Specifies how large the images showing what each AOI corresponds to should be.
+        aoi_img_dir : str
+            Path to directory that images showing what each AOI corresponds to will be stored.
+        remove_background : bool
+            Whether or not to include the background AOI in the results
+        """
+        
+        # Load in the image
+        img = Image.open(labelled_img)
+        arr = np.array(img)
+        arr = arr[:, :, :3]
+
+        # Find unique colors in the image
+        flatImg = np.reshape(arr, (-1, 3))
+        uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
+
+        # Try to ignore blending at edges in image
+        badColors = counts < 200
+        colors = uniq[~badColors]
+        print("Dealing with blending")
+        for i, badColor in enumerate(uniq[badColors]):
+            if i % 100 == 0:
+                print(i / len(uniq[badColors]))
+            
+            # Find the closest color in the good colors
+            bestRepl = np.argmin(np.sum(np.square(colors - badColor), axis=1))
+
+            # Find all places in image with bad color and replace with good color
+            idxs = np.all(flatImg == badColor, axis=1)
+            flatImg[idxs] = colors[bestRepl]
+
+        # Make an 'image' consisting of indexes into the colors list.
+        cluster_idx_img = np.zeros((flatImg.shape[0]))
+        for i, color in enumerate(colors):
+            idxs = np.all(flatImg == color, axis=1)
+            cluster_idx_img[idxs] = i
+        
+        # Recompute the unique colors in the image, and put the image back together after removing
+        # edge blending
+        uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
+        reImg = np.reshape(flatImg, arr.shape)
+        cluster_idx_img = np.reshape(cluster_idx_img, arr.shape[:-1])
+
+        # Delete the old aois directory, replace with a new one
+        if first_run:
+            shutil.rmtree(aoi_img_dir, ignore_errors=True)
+            os.makedirs(aoi_img_dir, exist_ok=True)
+        
+        aoiList = []
+        # Write out the image files so someone can fix them if necessary, and for interpretation later
+        for x in np.unique(cluster_idx_img):
+            aoiList.append(cluster_idx_img == x)
+            if first_run:
+                fig, ax = plt.subplots(figsize=figsize)
+                plt.imshow(aoiList[-1])
+                plt.title(f"AOI {x}")
+                plt.savefig(os.path.join(aoi_img_dir, f"{x}.png"))
+                plt.close(fig)
+        
+        if first_run:
+            print("Exiting due to first_run flag being set to true. Check the aois folder for all identified AOIs and correct the underlying image file to have solid blocks of color rather than feathered/blended edges on the color blocks.")
+            exit(0)
+
+        time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col = track.cols
+        data = track.raw_df
+
+        # Use the last cluster_len observations to cluster
+        toCluster = data[[IMG_X_col, IMG_Y_col]].to_numpy()[:, :, None].repeat(cluster_len, axis=2)
+        for i in range(toCluster.shape[2]):
+            toCluster[:, :, i] = np.roll(toCluster[:, :, i], i, axis=0)
+
+        # Cut off the first cluster_len - 1 observations
+        toCluster = np.nan_to_num(toCluster[(cluster_len - 1):], nan=-1).astype("int64")
+        
+        # Remove places where eye tracker stopped tracking
+        bad = np.any(np.any(toCluster == -1, axis=-1), axis=-1)
+
+        # Cluster the track into the AOIs
+        clustered = cluster_idx_img[toCluster[:, 1, :], toCluster[:, 0, :]]
+        clustered = stats.mode(clustered, axis=1).mode
+        clustered[bad] = -1
+
+        background_idx = np.argmin(np.sum(np.square(uniq - np.array([255, 255, 255])), axis=1))
+        print(f"AOI {background_idx} is assumed to be the background")
+
+        # Remove background and duplicates 
+        aoiStrs = np.array([key for key, group in itertools.groupby(clustered[~bad])])
+        if remove_background:
+            aoiStrs = aoiStrs[aoiStrs != background_idx] # Ignore cluster indicating the background
+            aoiStrs = np.array([key for key, group in itertools.groupby(aoiStrs)]) # Deduplicate patterns once more
+
+        # Compute transition probabilities between aois
+        transitions = np.zeros((len(aoiList), len(aoiList)))
+        for i in range(1, aoiStrs.shape[0]):
+            prev = aoiStrs[i - 1]
+            curr = aoiStrs[i]
+            if prev != curr:
+                transitions[int(prev), int(curr)] += 1
+        transitionProbs = transitions / np.sum(transitions, axis=1).reshape((transitions.shape[0], 1))
+
+        return cls(aoiList, track, cluster_len, transitionProbs, aoiStrs, colors, reImg, cluster_idx_img)
+    
+    def compute_patterns(self, max_length: int, lev_dists: Tuple[int], weights: Tuple[float] = None, normalize = "n_patterns"):
+        """
+        Attempts to find consistent scan patterns within a file
+
+        Parameters
+        -----------
+        max_length : int
+            Maximum length of patterns to look for
+        lev_dists : Tuple[int]
+            Tuple of size max_length - 1, chooses how many Levenshtein distance away we should count observations of a pattern
+        weights : Tuple[float]
+            Tuple of size max_length - 1, chooses how to weight each observation of an observation a given Levenshtein distance away for the final consistency score,
+            defaults to the following weighting scheme: 0.6, 0.2, 0.1, 0.05, etc. Should sum to 1
+        normalize : str
+            "n_patterns", "time" or anything else for neither, chooses how to normalize patternScores, by number of scan patterns found, by amount of time in file, or by nothing.
+        Returns
+        -------
+        patterns : List[Tuple[Tuple, np.ndarray]]
+            List of all patterns, along with the number of observations of each scan pattern, entries for observations separate out 0-distance away, 1-distance away, etc. observations.
+            Multiplied by weights and divided by number of patterns in file to determine importance
+        patternScores : np.ndarray
+            Importance scores of each scan pattern in patterns
+        """
+        # Verify function inputs conform to assumptions
+        if len(lev_dists) != max_length - 1:
+            raise ValueError(f"lev_dists must be of size {max_length - 1}")
+        if weights is not None and len(weights) != max_length - 1:
+            raise ValueError(f"weights must be of size {max_length - 1}")
+        if round(sum(weights), 10) != 1:
+            raise ValueError(f"Weights must sum to 1 instead of {round(sum(weights), 10)}.")
+        
+        # Find all observations of scan patterns of up to maxLevDist away
+        existingPatterns = {}
+        maxPatternSize = max_length
+        maxLevDist = lev_dists
+        for size in range(2, maxPatternSize + 1):
+            for x in np.lib.stride_tricks.sliding_window_view(self.scan_string, size):
+                x = tuple(x)
+                if x in existingPatterns:
+                    existingPatterns[x][0] += 1
+                else:
+                    existingPatterns[x] = [1] + [0] * max(maxLevDist)
+                    for z in existingPatterns.keys():
+                        if z != x:
+                            ld = Levenshtein.distance(x, z)
+                            if ld <= maxLevDist[size - 2]:
+                                levCutoff = maxLevDist[size - 2] - ld
+                                levsToAdd = existingPatterns[z][:(levCutoff + 1)]
+                                for i, lev in enumerate(levsToAdd):
+                                    existingPatterns[x][1 + i] += lev
+                for z in existingPatterns.keys():
+                    if z == x:
+                        pass
+                    else:
+                        ld = Levenshtein.distance(x, z)
+                        if ld <= maxLevDist[size - 2]:
+                            existingPatterns[z][ld] += 1
+        
+        # Calculate importance scores
+        importance = weights
+        if importance is None:
+            importance = np.array([0.6] + [0.2 * (0.5 ** x) for x in range(max(maxLevDist))])
+        importance[-1] += 1 - np.sum(importance)
+        patterns = [(x, np.array(existingPatterns[x])) for x in existingPatterns]
+        patterns = sorted(patterns, key = lambda x: np.sum(importance * x[1]), reverse=True)
+        patternScores = np.array([np.sum(importance * x[1]) for x in patterns])
+
+        if normalize == "n_patterns":
+            patternScores = patternScores / len(patternScores)
+        elif normalize == "time":
+            patternScores = patternScores / (self.track.df.shape[0] / 50)
+        
+        return patterns, patternScores
