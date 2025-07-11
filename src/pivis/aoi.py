@@ -452,6 +452,7 @@ class SupervisedAreasOfInterest:
             Whether or not to print progress, prints every 50 frames.
         """
         # Initialize variables
+        plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
         data = self.track.raw_df
         img = self.track.img
         FuncAnimation = animation.FuncAnimation
