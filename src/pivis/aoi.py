@@ -642,7 +642,7 @@ class SupervisedAreasOfInterest:
             raise ValueError(f"lev_dists must be of size {max_length - 1}")
         if weights is not None and len(weights) != max_length - 1:
             raise ValueError(f"weights must be of size {max_length - 1}")
-        if round(sum(weights), 10) != 1:
+        if weights is not None and (round(sum(weights), 10) != 1):
             raise ValueError(f"Weights must sum to 1 instead of {round(sum(weights), 10)}.")
         
         # Find all observations of scan patterns of up to maxLevDist away
