@@ -14,6 +14,7 @@ from PIL import Image
 import Levenshtein
 import imageio_ffmpeg
 
+import os
 
 from .track import Track
 
@@ -519,41 +520,57 @@ class SupervisedAreasOfInterest:
             Whether or not to include the background AOI in the results
         """
         
-        # Load in the image
-        img = Image.open(labelled_img)
-        arr = np.array(img)
-        arr = arr[:, :, :3]
+        cluster_idx_img = None
+        reImg = None
+        colors = None
+        uniq = None
+        counts = None
 
-        # Find unique colors in the image
-        flatImg = np.reshape(arr, (-1, 3))
-        uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
+        if os.path.exists("cachecluster.npy"):
+            cluster_idx_img = np.load("cachecluster.npy")
+            reImg = np.load("cachere.npy")
+            colors = np.load("cachecol.npy")
+            uniq, counts = np.unique(np.reshape(reImg, (-1, 3)), axis=0, return_counts=True)
+        else:
+            # Load in the image
+            img = Image.open(labelled_img)
+            arr = np.array(img)
+            arr = arr[:, :, :3]
 
-        # Try to ignore blending at edges in image
-        badColors = counts < 200
-        colors = uniq[~badColors]
-        print("Dealing with blending")
-        for i, badColor in enumerate(uniq[badColors]):
-            if i % 100 == 0:
-                print(i / len(uniq[badColors]))
+            # Find unique colors in the image
+            flatImg = np.reshape(arr, (-1, 3))
+            uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
+
+            # Try to ignore blending at edges in image
+            badColors = counts < 200
+            colors = uniq[~badColors]
+            print("Dealing with blending")
+            for i, badColor in enumerate(uniq[badColors]):
+                if i % 100 == 0:
+                    print(i / len(uniq[badColors]))
+                
+                # Find the closest color in the good colors
+                bestRepl = np.argmin(np.sum(np.square(colors - badColor), axis=1))
+
+                # Find all places in image with bad color and replace with good color
+                idxs = np.all(flatImg == badColor, axis=1)
+                flatImg[idxs] = colors[bestRepl]
+
+            # Make an 'image' consisting of indexes into the colors list.
+            cluster_idx_img = np.zeros((flatImg.shape[0]))
+            for i, color in enumerate(colors):
+                idxs = np.all(flatImg == color, axis=1)
+                cluster_idx_img[idxs] = i
             
-            # Find the closest color in the good colors
-            bestRepl = np.argmin(np.sum(np.square(colors - badColor), axis=1))
+            # Recompute the unique colors in the image, and put the image back together after removing
+            # edge blending
+            uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
+            reImg = np.reshape(flatImg, arr.shape)
+            cluster_idx_img = np.reshape(cluster_idx_img, arr.shape[:-1])
 
-            # Find all places in image with bad color and replace with good color
-            idxs = np.all(flatImg == badColor, axis=1)
-            flatImg[idxs] = colors[bestRepl]
-
-        # Make an 'image' consisting of indexes into the colors list.
-        cluster_idx_img = np.zeros((flatImg.shape[0]))
-        for i, color in enumerate(colors):
-            idxs = np.all(flatImg == color, axis=1)
-            cluster_idx_img[idxs] = i
-        
-        # Recompute the unique colors in the image, and put the image back together after removing
-        # edge blending
-        uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
-        reImg = np.reshape(flatImg, arr.shape)
-        cluster_idx_img = np.reshape(cluster_idx_img, arr.shape[:-1])
+            np.save("cachecluster", cluster_idx_img)
+            np.save("cachere", reImg)
+            np.save("cachecol", colors)
 
         # Delete the old aois directory, replace with a new one
         if first_run:
