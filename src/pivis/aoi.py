@@ -349,6 +349,7 @@ class UnsupervisedAreasOfInterest:
         
         return cls(mus, covs, mvns, track, cluster_len, noCluster, cluster, transitionProbs)
     
+
 class SupervisedAreasOfInterest:
     """
     Represents the various AOIs in an image as ovals (via Multivariate normal distribution)
@@ -371,9 +372,11 @@ class SupervisedAreasOfInterest:
         Image showing all the AOIs
     cluster_img : np.ndarray
         Image similar to aoi_img but with colors replaced with indices in colors
+    background_idx : int
+        Specifies which AOI corresponds to the background
     """
     
-    def __init__(self, aois: List[np.ndarray], track : Track, cluster_len : int, transition_probs : np.ndarray, scan_string : np.ndarray, colors : np.ndarray, aoi_img : np.ndarray, cluster_img: np.ndarray):
+    def __init__(self, aois: List[np.ndarray], track : Track, cluster_len : int, transition_probs : np.ndarray, scan_string : np.ndarray, colors : np.ndarray, aoi_img : np.ndarray, cluster_img: np.ndarray, background_idx: int):
         self.aois = aois
         self.track = track
         self.cluster_len = cluster_len
@@ -382,6 +385,57 @@ class SupervisedAreasOfInterest:
         self.colors = colors
         self.aoi_img = aoi_img
         self.cluster_img = cluster_img
+        self.background_idx = background_idx
+
+    def plot_pattern(self, pattern: Tuple[int], figsize: Tuple[int] = (10, 7)):
+        """
+        Plot the AOIs involved in a scan pattern, Plot is left in memory so the user can plot extra things on it/change the title, etc.
+        
+        Parameters
+        -----------
+        pattern : Tuple[int]
+            Specifies which scan pattern to plot
+        figsize : Tuple[int]
+            Size of figure to plot, in inches
+            Default is (10, 7)
+        Returns
+        --------
+        Tuple[figure.Figure, axes.Axes, List]
+            Figure, axes of created image, list of all plots used for customization
+        """
+        toPlot = np.copy(self.cluster_img)
+        uniqVals = np.unique(toPlot)
+        
+        # Set all AOIs not in pattern to the background color.
+        for x in uniqVals:
+            if x not in pattern:
+                toPlot[toPlot == x] = self.background_idx
+        
+        # Plot the AOIs in the pattern
+        fig, ax = plt.subplots(figsize=figsize)
+        plots = []
+        img = self.track.img
+        plots.append(ax.imshow(img))
+        plots.append(ax.imshow(toPlot, cmap="tab20", alpha=1 - (toPlot == self.background_idx).astype("float64"), vmin=np.min(self.cluster_img), vmax=np.max(self.cluster_img)))
+        
+        # Plot transitions for clarity
+        for i, j in np.lib.stride_tricks.sliding_window_view(pattern, 2):
+            # print(i, j)
+            # print(np.unique(self.cluster_img))
+            mu_i = np.mean(np.argwhere(self.cluster_img == i), axis=0)[::-1]
+            mu_j = np.mean(np.argwhere(self.cluster_img == j), axis=0)[::-1]
+            # print(mu_i)
+            # print(mu_j)
+            x = [mu_i[0], mu_j[0]]
+            y = [mu_i[1], mu_j[1]]
+            plots.append(ax.plot(x, y, color="black"))
+            slope = (y[1] - y[0]) / (x[1] - x[0])
+            p25Dist = 0.25 * (x[1] - x[0])
+            newy = y[0] + p25Dist * slope
+            newx = p25Dist + x[0]
+            plots.append(ax.arrow(newx, newy, np.sign(x[1] - x[0]), np.sign(x[1] - x[0]) * (y[1] - y[0]) / (x[1] - x[0]), head_width=40))
+        
+        return fig, ax, plots
 
     def plot(self, figsize: Tuple[int] = (15, 10), plot_transitions: bool = False, transitionThreshold: float = 0.3) -> Tuple[figure.Figure, axes.Axes]:
         """
@@ -495,7 +549,7 @@ class SupervisedAreasOfInterest:
         return SupervisedAreasOfInterest.load(fileloc)
 
     @classmethod
-    def from_labelled_img(cls, labelled_img: str, track: Track, verbose: bool = True, cluster_len: int = 5, figsize=(10,8), aoi_img_dir = "./aois", remove_background = False, first_run = False) -> Self:
+    def from_labelled_img(cls, labelled_img: str, track: Track, verbose: bool = True, cluster_len: int = 5, thresh_ignore: int = None, thresh_hit: int = None, figsize=(10,8), aoi_img_dir = "./aois", remove_background = False, first_run = False) -> Self:
         """
         Generates AOIs from tracking information
 
@@ -510,8 +564,14 @@ class SupervisedAreasOfInterest:
             Default is False.
         cluster_len : int
             When looking at the raw data, how many previous observations should be used to determine the cluster of the current observation.
-            (i.e. a smoothing factor for clustering the raw data, higher is smoother)
+            (i.e. a smoothing factor for clustering the raw data, higher is smoother). Only used if thresh_ignore and thresh_hit are None
             Default is 5
+        thresh_ignore : int
+            Ignore all fixations below this threshold. I.e. if tracker sees 5,5,5,3,5,5 and thresh_ignore is 1, ignores the 3 in the middle of the 5s.
+            Default is None, i.e. use cluster_len strategy instead.
+        thresh_hit : int
+            Only count fixations with duration above this threshold.
+            Default is None, i.e. use cluster_len strategy instead.
         figsize : Tuple[int]
             Specifies how large the images showing what each AOI corresponds to should be.
         aoi_img_dir : str
@@ -595,41 +655,111 @@ class SupervisedAreasOfInterest:
         time_col, IMG_X_col, IMG_Y_col, type_col, fixation_X_col, fixation_Y_col = track.cols
         data = track.raw_df
 
-        # Use the last cluster_len observations to cluster
-        toCluster = data[[IMG_X_col, IMG_Y_col]].to_numpy()[:, :, None].repeat(cluster_len, axis=2)
-        for i in range(toCluster.shape[2]):
-            toCluster[:, :, i] = np.roll(toCluster[:, :, i], i, axis=0)
 
-        # Cut off the first cluster_len - 1 observations
-        toCluster = np.nan_to_num(toCluster[(cluster_len - 1):], nan=-1).astype("int64")
-        
-        # Remove places where eye tracker stopped tracking
-        bad = np.any(np.any(toCluster == -1, axis=-1), axis=-1)
+        if thresh_hit is None:
+            # Use the last cluster_len observations to cluster
+            toCluster = data[[IMG_X_col, IMG_Y_col]].to_numpy()[:, :, None].repeat(cluster_len, axis=2)
+            for i in range(toCluster.shape[2]):
+                toCluster[:, :, i] = np.roll(toCluster[:, :, i], i, axis=0)
 
-        # Cluster the track into the AOIs
-        clustered = cluster_idx_img[toCluster[:, 1, :], toCluster[:, 0, :]]
-        clustered = stats.mode(clustered, axis=1).mode
-        clustered[bad] = -1
+            # Cut off the first cluster_len - 1 observations
+            toCluster = np.nan_to_num(toCluster[(cluster_len - 1):], nan=-1).astype("int64")
+            
+            # Remove places where eye tracker stopped tracking
+            bad = np.any(np.any(toCluster == -1, axis=-1), axis=-1)
 
-        background_idx = np.argmin(np.sum(np.square(uniq - np.array([255, 255, 255])), axis=1))
-        print(f"AOI {background_idx} is assumed to be the background")
+            # Cluster the track into the AOIs
+            clustered = cluster_idx_img[toCluster[:, 1, :], toCluster[:, 0, :]]
+            clustered = stats.mode(clustered, axis=1).mode
+            clustered[bad] = -1
 
-        # Remove background and duplicates 
-        aoiStrs = np.array([key for key, group in itertools.groupby(clustered[~bad])])
-        if remove_background:
-            aoiStrs = aoiStrs[aoiStrs != background_idx] # Ignore cluster indicating the background
-            aoiStrs = np.array([key for key, group in itertools.groupby(aoiStrs)]) # Deduplicate patterns once more
+            background_idx = np.argmin(np.sum(np.square(uniq - np.array([255, 255, 255])), axis=1))
+            print(f"AOI {background_idx} is assumed to be the background")
 
-        # Compute transition probabilities between aois
-        transitions = np.zeros((len(aoiList), len(aoiList)))
-        for i in range(1, aoiStrs.shape[0]):
-            prev = aoiStrs[i - 1]
-            curr = aoiStrs[i]
-            if prev != curr:
-                transitions[int(prev), int(curr)] += 1
-        transitionProbs = transitions / np.sum(transitions, axis=1).reshape((transitions.shape[0], 1))
+            # Remove background and duplicates 
+            aoiStrs = np.array([key for key, group in itertools.groupby(clustered[~bad])])
+            if remove_background:
+                aoiStrs = aoiStrs[aoiStrs != background_idx] # Ignore cluster indicating the background
+                aoiStrs = np.array([key for key, group in itertools.groupby(aoiStrs)]) # Deduplicate patterns once more
 
-        return cls(aoiList, track, cluster_len, transitionProbs, aoiStrs, colors, reImg, cluster_idx_img)
+            # Compute transition probabilities between aois
+            transitions = np.zeros((len(aoiList), len(aoiList)))
+            for i in range(1, aoiStrs.shape[0]):
+                prev = aoiStrs[i - 1]
+                curr = aoiStrs[i]
+                if prev != curr:
+                    transitions[int(prev), int(curr)] += 1
+            transitionProbs = transitions / np.sum(transitions, axis=1).reshape((transitions.shape[0], 1))
+
+            return cls(aoiList, track, cluster_len, transitionProbs, aoiStrs, colors, reImg, cluster_idx_img, background_idx)
+        else:
+            # Remove places where eye tracker stopped tracking
+            toCluster = data[[IMG_X_col, IMG_Y_col]].to_numpy()
+            toCluster = np.nan_to_num(toCluster, nan=-1).astype("int64")
+            bad = np.any(toCluster == -1, axis=1)
+            toCluster = toCluster[~bad]
+
+            # Cluster the track into the AOIs
+            toCluster = cluster_idx_img[toCluster[:, 1], toCluster[:, 0]]
+
+            # Mark durations below or equal to thresh_ignore
+            bad = np.zeros(toCluster.shape[0], dtype=bool)
+            currVal = None
+            chainLen = None
+            for i in range(toCluster.shape[0]):
+                if currVal is None:
+                    chainLen = 1
+                    currVal = toCluster[i]
+                elif toCluster[i] != currVal:
+                    if chainLen <= thresh_ignore:
+                        bad[i - chainLen:i] = True
+                    chainLen = 1
+                    currVal = toCluster[i]
+                else:
+                    chainLen += 1
+
+            # Finish the algorithm            
+            if chainLen <= thresh_ignore:
+                bad[toCluster.shape[0] - chainLen:] = True
+
+            # Remove marked points
+            toCluster = toCluster[~bad]
+
+            # Use the last thresh_hit observations to cluster
+            toCluster = toCluster[:, None].repeat(thresh_hit, axis=1)
+            for i in range(toCluster.shape[1]):
+                toCluster[:, i] = np.roll(toCluster[:, i], i, axis=0)
+
+            # Cut off the first thresh_hit - 1 observations
+            toCluster = toCluster[(thresh_hit - 1):]
+            
+            # Ensure we only take points that were looked at for long enough
+            clustered = toCluster
+            oks = np.all(clustered == clustered[:, 0, None], axis=1)
+            mode = stats.mode(clustered, axis=1).mode
+            clustered = mode[oks]
+
+            background_idx = np.argmin(np.sum(np.square(uniq - np.array([255, 255, 255])), axis=1))
+            print(f"AOI {background_idx} is assumed to be the background")
+
+            # Remove background and duplicates 
+            aoiStrs = np.array([key for key, group in itertools.groupby(clustered)])
+            if remove_background:
+                aoiStrs = aoiStrs[aoiStrs != background_idx] # Ignore cluster indicating the background
+                aoiStrs = np.array([key for key, group in itertools.groupby(aoiStrs)]) # Deduplicate patterns once more
+
+            print(aoiStrs)
+            
+            # Compute transition probabilities between aois
+            transitions = np.zeros((len(aoiList), len(aoiList)))
+            for i in range(1, aoiStrs.shape[0]):
+                prev = aoiStrs[i - 1]
+                curr = aoiStrs[i]
+                if prev != curr:
+                    transitions[int(prev), int(curr)] += 1
+            transitionProbs = transitions / np.sum(transitions, axis=1).reshape((transitions.shape[0], 1))
+
+            return cls(aoiList, track, thresh_hit, transitionProbs, aoiStrs, colors, reImg, cluster_idx_img, background_idx)
     
     def compute_patterns(self, max_length: int, lev_dists: Tuple[int], weights: Tuple[float] = None, normalize = "n_patterns"):
         """
@@ -653,6 +783,10 @@ class SupervisedAreasOfInterest:
             Multiplied by weights and divided by number of patterns in file to determine importance
         patternScores : np.ndarray
             Importance scores of each scan pattern in patterns
+        aoi_count : dict
+            Counts the number of times each AOI is looked at
+        n_aois : int
+            Overall number of AOIs looked at
         """
         # Verify function inputs conform to assumptions
         if len(lev_dists) != max_length - 1:
@@ -703,4 +837,11 @@ class SupervisedAreasOfInterest:
         elif normalize == "time":
             patternScores = patternScores / (self.track.df.shape[0] / 50)
         
-        return patterns, patternScores
+        # Count number of aois looked at, counts of each AOI
+        n_aois = len(np.unique(self.scan_string))
+        aoi_count = {f"AOIFrq_{x}": 0 for x in range(len(self.aois))}
+
+        for x in self.scan_string:
+            aoi_count[f"AOIFrq_{int(x)}"] += 1
+
+        return patterns, patternScores, aoi_count, n_aois
