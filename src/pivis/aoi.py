@@ -594,7 +594,10 @@ class SupervisedAreasOfInterest:
         else:
             # Load in the image
             img = Image.open(labelled_img)
+            img = img.convert("RGB")
             arr = np.array(img)
+            print(arr.shape)
+            print(img.mode)
             arr = arr[:, :, :3]
 
             # Find unique colors in the image
@@ -602,7 +605,7 @@ class SupervisedAreasOfInterest:
             uniq, counts = np.unique(flatImg, axis=0, return_counts=True)
 
             # Try to ignore blending at edges in image
-            badColors = counts < 200
+            badColors = counts < 10000
             colors = uniq[~badColors]
             print("Dealing with blending")
             for i, badColor in enumerate(uniq[badColors]):
@@ -669,6 +672,9 @@ class SupervisedAreasOfInterest:
             bad = np.any(np.any(toCluster == -1, axis=-1), axis=-1)
 
             # Cluster the track into the AOIs
+            print(np.max(toCluster[:, 1, :]), np.min(toCluster[:, 1, :]))
+            print(np.max(toCluster[:, 0, :]), np.min(toCluster[:, 0, :]))
+            print()
             clustered = cluster_idx_img[toCluster[:, 1, :], toCluster[:, 0, :]]
             clustered = stats.mode(clustered, axis=1).mode
             clustered[bad] = -1
@@ -775,7 +781,7 @@ class SupervisedAreasOfInterest:
             Tuple of size max_length - 1, chooses how to weight each observation of an observation a given Levenshtein distance away for the final consistency score,
             defaults to the following weighting scheme: 0.6, 0.2, 0.1, 0.05, etc. Should sum to 1
         normalize : str
-            "n_patterns", "time" or anything else for neither, chooses how to normalize patternScores, by number of scan patterns found, by amount of time in file, or by nothing.
+            "n_patterns", "time", or "children" or anything else for neither, chooses how to normalize and return patternScores, by number of scan patterns found, by amount of time in file, or by nothing.
         Returns
         -------
         patterns : List[Tuple[Tuple, np.ndarray]]
@@ -833,10 +839,40 @@ class SupervisedAreasOfInterest:
         patternScores = np.array([np.sum(importance * x[1]) for x in patterns])
 
         if normalize == "n_patterns":
-            patternScores = patternScores / len(patternScores)
+            patternScores2 = patternScores / len(patternScores)
         elif normalize == "time":
-            patternScores = patternScores / (self.track.df.shape[0] / 50)
-        
+            patternScores2 = patternScores / (self.track.df.shape[0] / 50)
+        elif normalize == "children":
+            len2Patterns = [[y.item() for y in x[0]] for x in patterns if len(x[0]) == 2]
+            len2PatternScores = [x for i, x in enumerate(patternScores) if len(patterns[i][0]) == 2]
+            patternScores2 = {}
+            scores = []
+            patts = []
+            for i, patt in enumerate(len2Patterns):
+                patt = tuple(patt)
+                if patt not in patternScores2 and patt[::-1] not in patternScores2:
+                    patternScores2[patt] = {"subpatterns": [], "scores": []}
+                    patts.append(patt)
+                    scores.append(len2PatternScores[i])
+            scores = np.array(scores)
+            scores = scores / np.sum(scores)
+            for i, score in enumerate(scores):
+                patternScores2[patts[i]]["score"] = score.item()
+
+            len3Patterns = [[y.item() for y in x[0]] for x in patterns if len(x[0]) == 3]
+            len3PatternScores = [x for i, x in enumerate(patternScores) if len(patterns[i][0]) == 3]
+            for i, patt in enumerate(len3Patterns):
+                patt = tuple(patt)
+                if patt[:2] in patternScores2:
+                    patternScores2[patt[:2]]["subpatterns"].append(patt)
+                    patternScores2[patt[:2]]["scores"].append(len3PatternScores[i].item())
+
+            for key in patternScores2:
+                scoreSum = sum(patternScores2[key]["scores"])
+                for i in range(len(patternScores2[key]["scores"])):
+                    patternScores2[key]["scores"][i] = patternScores2[key]["scores"][i] / scoreSum
+
+
         # Count number of aois looked at, counts of each AOI
         n_aois = len(np.unique(self.scan_string))
         aoi_count = {f"AOIFrq_{x}": 0 for x in range(len(self.aois))}
@@ -844,4 +880,4 @@ class SupervisedAreasOfInterest:
         for x in self.scan_string:
             aoi_count[f"AOIFrq_{int(x)}"] += 1
 
-        return patterns, patternScores, aoi_count, n_aois
+        return patterns, patternScores2, patternScores / np.sum(patternScores), aoi_count, n_aois
